@@ -58,12 +58,13 @@ typedef struct FONTUS_Header {
 
 typedef struct ROOTOutData {
     // FONTUS info
+    uint32_t device_mask;
     uint32_t trigger_word;
     uint32_t self_trigger_word;
-    uint32_t device_mask;
-    double led_timestamp;
-    double kicker_timestamp;
-    double ct_timestamp;
+    double fontus_timetag;
+    double led_timetag;
+    double kicker_timetag;
+    double ct_timetag;
     uint32_t nmod;
     // CERES info
     uint32_t nsample;
@@ -87,21 +88,29 @@ int main(int argc, char** argv) {
     TFile* fout = new TFile(argv[2], "RECREATE");
 
     ROOTOutData out_data;
+    ROOTOutData temp_out_data;
+    memset(&temp_out_data, 0, sizeof(ROOTOutData));
+    memset(&out_data, 0, sizeof(ROOTOutData));
+
     out_data.fadc = (uint16_t*)malloc(DATA_MAX_SIZE);
     out_data.timetag = (double*)malloc(sizeof(double)*MAX_NUM_MOD);
+
+    // These two structs should share their dynamic buffers b/c just trust me
+    temp_out_data.fadc = out_data.fadc;
+    temp_out_data.timetag = out_data.timetag;
 
     TTree * tree = new TTree("tree", "tree");
     TBranch* trigger_word_branch = tree->Branch("trigger_word", &out_data.trigger_word, "trigger_word/i");
     TBranch* self_trigger_word_branch = tree->Branch("self_trigger_word", &out_data.self_trigger_word, "self_trigger_word/i");
     TBranch* device_mask_branch = tree->Branch("device_mask", &out_data.device_mask, "device_mask/i");
-    TBranch* led_timestamp_branch = tree->Branch("led_timestamp", &out_data.led_timestamp, "led_timestamp/D");
-    TBranch* kicker_timestamp_branch = tree->Branch("kicker_timestamp", &out_data.kicker_timestamp, "kicker_timestamp/D");
-    TBranch* ct_timestamp_branch = tree->Branch("ct_timestamp", &out_data.ct_timestamp, "ct_timestamp/D");
+    TBranch* led_timestamp_branch = tree->Branch("led_timestamp", &out_data.led_timetag, "led_timestamp/D");
+    TBranch* kicker_timestamp_branch = tree->Branch("kicker_timestamp", &out_data.kicker_timetag, "kicker_timestamp/D");
+    TBranch* ct_timestamp_branch = tree->Branch("ct_timestamp", &out_data.ct_timetag, "ct_timestamp/D");
     TBranch* nmod_branch = tree->Branch("nmod", &out_data.nmod, "nmod/i");
     TBranch* nsample_branch = tree->Branch("nsample", &out_data.nsample, "nsample/i");
     TBranch* timetag_branch = tree->Branch("TimeTag", out_data.timetag, "TimeTag[nmod]/D");
     TBranch* nchan_branch = tree->Branch("nchan", &out_data.nchan, "nchan/i");
-    TBranch* fadc_branch = tree->Branch("FADC", out_data.fadc, "FADC[nsample][nchan]/s");
+    TBranch* fadc_branch = tree->Branch("FADC", out_data.fadc, "FADC[nsample][128]/s");
 
     int i, j, k;
     unsigned char buffer[1024];
@@ -128,24 +137,26 @@ int main(int argc, char** argv) {
         }
         eb_header.device_mask = htonll(*((uint64_t*)(buffer + 8)));
         // We'll only look at the bottom 32-bits
-        out_data.device_mask = (uint32_t)(eb_header.device_mask & 0xFFFFFFFF);
-        if(out_data.device_mask != eb_header.device_mask) {
+        temp_out_data.device_mask = (uint32_t)(eb_header.device_mask & 0xFFFFFFFF);
+        if(temp_out_data.device_mask != eb_header.device_mask) {
             printf("Non 32-bit device_mask encoutered. I can't handle this!\n");
             break;
         }
 
 
-        out_data.nmod = 0;
+        temp_out_data.nmod = 0;
         // Count the number of bits set in the device mask to get the number of
         // modules
-        for(uint32_t temp=(out_data.device_mask & ~FONTUS_DEVICE_MASK); temp; temp=temp>>1) {
-            out_data.nmod += temp & 0x1;
+        for(uint32_t temp=(temp_out_data.device_mask & ~FONTUS_DEVICE_MASK); temp; temp=temp>>1) {
+            temp_out_data.nmod += temp & 0x1;
         }
-        out_data.nchan = out_data.nmod*NUM_CHANNELS_PER_MOD;
+
+        temp_out_data.nmod = 8;// TODO
+        temp_out_data.nchan = temp_out_data.nmod*NUM_CHANNELS_PER_MOD;
 
 
         // Then the FONTUS header
-        if(out_data.device_mask & FONTUS_DEVICE_MASK) {
+        if(temp_out_data.device_mask & FONTUS_DEVICE_MASK) {
             if(fread(buffer, FONTUS_HEADER_SIZE, 1, fin) !=1) {
                 //Error
                 break;
@@ -162,13 +173,51 @@ int main(int argc, char** argv) {
             trig_header.ct_time = *((uint64_t*) (buffer+40)); 
             trig_header.crc = *((uint32_t*) (buffer+48));
 
-            out_data.trigger_word = trig_header.trig_flag;
-            out_data.self_trigger_word = trig_header.self_trigger_word;
-            out_data.led_timestamp = trig_header.led_trigger_time;
-            out_data.kicker_timestamp = trig_header.beam_time;
-            out_data.ct_timestamp = trig_header.ct_time;
+            temp_out_data.fontus_timetag = trig_header.timestamp;
+            temp_out_data.trigger_word = trig_header.trig_flag;
+            temp_out_data.self_trigger_word = trig_header.self_trigger_word;
+            temp_out_data.led_timetag = trig_header.led_trigger_time;
+            temp_out_data.kicker_timetag = trig_header.beam_time;
+            temp_out_data.ct_timetag = trig_header.ct_time;
+
+            // See if we have to do the look back thing
+            if(loop!=0) {
+                double earliest_time = 0;
+                double latest_time = 0;
+                for(int i=0; i<temp_out_data.nmod; i++) {
+                    double this_time = temp_out_data.timetag[i];
+
+                    if(i==0 || this_time < earliest_time) {
+                        earliest_time = this_time;
+                    }
+                    if(i==0 || this_time > latest_time) {
+                        latest_time = this_time;
+                    }
+                }
+                // Each sample represents 2ns, but timestamp the clock runs at
+                // 250MHz, which corresponds to 4ns per tick.
+                latest_time += temp_out_data.nsample/2.;
+
+                if(temp_out_data.led_timetag < latest_time && temp_out_data.led_timetag > earliest_time) {
+                    temp_out_data.led_timetag = temp_out_data.led_timetag;
+                    temp_out_data.led_timetag = 0;
+                }
+                if(temp_out_data.ct_timetag < latest_time && temp_out_data.ct_timetag > earliest_time) {
+                    temp_out_data.ct_timetag = temp_out_data.ct_timetag;
+                    temp_out_data.ct_timetag = 0;
+                }
+                if(temp_out_data.kicker_timetag < latest_time && temp_out_data.kicker_timetag > earliest_time) {
+                    temp_out_data.kicker_timetag = temp_out_data.kicker_timetag;
+                    temp_out_data.kicker_timetag = 0;
+                }
+            }
         }
 
+        if(loop!=0) {
+            tree->Fill();
+        }
+
+        out_data = temp_out_data;
         // Now go to each CERES XEM header and collect the headers
         for(i=0; i<out_data.nmod; i++) {
             if(fread(buffer, XEM_HEADER_SIZE, 1, fin) != 1) {
@@ -235,13 +284,15 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        tree->Fill();
+        //tree->Fill();
 
         long next_event = data_start_locations[out_data.nmod-1] + (headers[out_data.nmod-1].length+2)*sizeof(uint32_t)*NUM_CHANNELS_PER_MOD;
         if(fseek(fin, next_event, SEEK_SET)) {
             goto DONE;
         }
     }
+    // Make sure to get the final event
+    tree->Fill();
 
 
 DONE:
