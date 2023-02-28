@@ -14,14 +14,11 @@ conv_all = {}
 inner_channels = range(0, 96)
 veto_channels = range(96, 128)
 
-CHANNELS = inner_channels
+# Uncomment below to look at inner or veto PMT channels
+#CHANNELS = inner_channels
+CHANNELS = veto_channels
 
-#def cut_value(var):
-#    return 8.425/44.314*var - 0.901
-
-def cut_value(var):
-    return 0.040559*var +0.516458
-
+# Helper function to create a TH1D and apply my preferred style
 def my_new_th1d(name, title, binsx, low, high):
     h = ROOT.TH1D(name, title, binsx,low,high)
     h.SetStats(0)
@@ -40,17 +37,8 @@ h_uncut_clean = my_new_th1d("h_uncut_clean", "Clean;Charge [pC];Counts", 500, -1
 h_uncut_clean.SetLineColor(2)
 h_uncut_noisey.SetLineColor(2)
 
-kernels = np.array([eval(x) for x in open("kernels.txt").readlines()])
-kernels = [k/np.sum(np.abs(k)) for k in kernels]
-
-kernel2 = [-0.11557788944719505, 0.025125628140813205, -0.4045226130656374, 0.22613065326549986, 0.15326633165750536, -0.04648241205995873, -2.1469849246232116, -8.247487437185555, -12.341708542713604, -7.153266331658415, -3.4874055415621115, -3.1368221941993397, -2.892676767676676, -1.4266750948163462, -0.9816687737038592, -1.2249683143218135, -0.840966921119616, -0.3613231552162688, -0.5318471337577648, -0.5650510204077364]
-#kernel2 = np.array([-3.18, -13.18, -40.18, -33.18, -16.18,  -9.18, -10.18, -10.18, -3.18], dtype=np.float64)
-kernel2 -= np.sum(kernel2)/float(len(kernel2))
-kernel2 = kernel2/np.sum(np.abs(kernel2))
-
-#end_limit = -1
-end_limit = 950
-saved_wfs = defaultdict(list)
+end_limit = 950 # only look at the first 950 samples to avoid any LED induced noise
+VARIANCE_THRESHOLD = 23 # Variance threshold for where a SPE pulse is found
 for fn in files:
     runid = fn[:fn.find(".")]
     charges = defaultdict(list)
@@ -67,29 +55,39 @@ for fn in files:
             conv = np.convolve(kernels[0], wf-bline, mode="same") 
             conv2 = np.convolve(kernel2, wf-bline, mode="same")
             varis = np.var(rolling_window(wf, 6), axis=-1)
-            locs = np.where(varis > 23)[0]
+            # Find locations where the variance goes above threshold
+            locs = np.where(varis > VARIANCE_THRESHOLD)[0]
+            # Find only the start of the PMT waveforms, i.e where ever the threshold is crossed first
             start_locs = np.concatenate((locs[0:1], locs[1:][np.diff(locs)>1]))
             for loc in start_locs:
+                # Find the start and end of waveform. Unless it's at the start/end of the
+                # waveform use a fixed 15 sample window
                 start = max(loc-3, 0)
                 end = min(len(wf), start+15)
+                # Find the largest values for the variance & convolution variables within the pulse window
                 c = np.max(conv[start:end])
                 c2 = np.max(conv2[start:end])
                 v = np.max(varis[start:end])
+
+                # Get the PMT pulse charge
                 this_charge = calculate_charge(wf[start:end], bline)
+
+                # Store values before applying cuts/filters
                 uncut_charges[chan].append(this_charge)
                 variances[chan].append(v)
                 convs[chan].append((c,c2))
+                # Apply cuts
                 cut = cut_value(v)
                 if(v < 180 and (c>cut or c2 < 3)):
                     continue
                 charges[chan].append(this_charge)
-                if(this_charge < 0.5 and this_charge > 0.3 and ((chan%4) in [1,2])):
-                    saved_wfs[chan].append(wf[ max(start-15, 0):min(end+15, len(wf))])
 
+    # Store pulse values, indexed by run, for later inspection
     charge_all[runid] = (charges, uncut_charges)
     var_all[runid] = variances
     conv_all[runid] = convs
 
+    # Fill histograms
     for chan in CHANNELS:
         h = h_clean
         h_uncut = h_uncut_clean
