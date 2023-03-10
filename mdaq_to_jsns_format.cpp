@@ -69,6 +69,7 @@ typedef struct ROOTOutData {
     // CERES info
     uint32_t nsample;
     uint32_t nchan;
+    uint32_t data_volume;
     double* timetag;
     uint16_t* fadc;
 } ROOTOutData;
@@ -110,7 +111,8 @@ int main(int argc, char** argv) {
     TBranch* nsample_branch = tree->Branch("nsample", &out_data.nsample, "nsample/i");
     TBranch* timetag_branch = tree->Branch("TimeTag", out_data.timetag, "TimeTag[nmod]/D");
     TBranch* nchan_branch = tree->Branch("nchan", &out_data.nchan, "nchan/i");
-    TBranch* fadc_branch = tree->Branch("FADC", out_data.fadc, "FADC[nsample][128]/s");
+    TBranch* data_volume_branch = tree->Branch("data_volume", &out_data.data_volume, "data_volume/i");
+    TBranch* fadc_branch = tree->Branch("FADC", out_data.fadc, "FADC[data_volume]/s");
 
     int i, j, k;
     unsigned char buffer[1024];
@@ -119,7 +121,6 @@ int main(int argc, char** argv) {
     XEM_Header headers[16];
     long data_start_locations[16];
     EB_Header eb_header;
-
 
     // Get the data file size
     fseek(fin, 0, SEEK_END);
@@ -130,8 +131,8 @@ int main(int argc, char** argv) {
     // Start with the event builder header
     int loop=0;
     while(1) {
-        printf("%i\n", loop++);
-        if(fread(buffer, EB_HEADER_SIZE, 1, fin) !=1) {
+        printf("%i\n", loop);
+        if(fread(buffer, EB_HEADER_SIZE, 1, fin) != 1) {
             //Error
             break;
         }
@@ -151,9 +152,12 @@ int main(int argc, char** argv) {
             temp_out_data.nmod += temp & 0x1;
         }
 
-        temp_out_data.nmod = 8;// TODO
-        temp_out_data.nchan = temp_out_data.nmod*NUM_CHANNELS_PER_MOD;
+        // Temporary hack to deal with a bug that was present in the Dec2022 data
+        if(temp_out_data.nmod == 0) {
+            temp_out_data.nmod = 8;// TODO
+        }
 
+        temp_out_data.nchan = temp_out_data.nmod*NUM_CHANNELS_PER_MOD;
 
         // Then the FONTUS header
         if(temp_out_data.device_mask & FONTUS_DEVICE_MASK) {
@@ -255,6 +259,7 @@ int main(int argc, char** argv) {
         // The data sample count is for number of 32-bit words.
         // But each of those 32-bits is composed of 2 16-bit samples.
         out_data.nsample = nsample*2;
+        out_data.data_volume = out_data.nchan*out_data.nsample;
 
         for(i=0; i<out_data.nmod; i++) {
             // Go to the start of the actual ADC data
@@ -274,22 +279,22 @@ int main(int argc, char** argv) {
                     goto DONE;
                 }
 
-                uint16_t* data_loc = out_data.fadc + (i*NUM_CHANNELS_PER_MOD + j)*nsample;
-                if(fread(data_loc, sizeof(uint16_t), nsample, fin) != nsample) {
+                uint16_t* data_loc = out_data.fadc + (i*NUM_CHANNELS_PER_MOD + j)*out_data.nsample;
+                if(fread(data_loc, sizeof(uint16_t), out_data.nsample, fin) != out_data.nsample) {
                     // Error
                     goto DONE;
                 }
-                for(k=0; k<nsample;k++) {
+                for(k=0; k<out_data.nsample;k++) {
                     data_loc[k] = ntohs(data_loc[k]);
                 }
             }
         }
-        //tree->Fill();
 
         long next_event = data_start_locations[out_data.nmod-1] + (headers[out_data.nmod-1].length+2)*sizeof(uint32_t)*NUM_CHANNELS_PER_MOD;
         if(fseek(fin, next_event, SEEK_SET)) {
             goto DONE;
         }
+        loop++;
     }
     // Make sure to get the final event
     tree->Fill();
