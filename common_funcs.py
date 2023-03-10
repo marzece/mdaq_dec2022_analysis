@@ -92,7 +92,11 @@ def read_waveforms(fn, include_times=False):
         f = ROOT.TFile(fn, "READ")
         t= f.Get("tree")
         for ev in t:
-            wfs = np.reshape(list(ev.FADC), (128, ev.nsample))
+            wfs = None
+            if(hasattr(ev, "nchan")):
+                wfs = np.reshape(list(ev.FADC), (ev.nchan, ev.nsample))
+            else:
+                wfs = np.reshape(list(ev.FADC), (128, ev.nsample))
             if(include_times):
                 times = np.array(list(ev.TimeTag))
                 yield wfs, times
