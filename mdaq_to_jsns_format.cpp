@@ -136,6 +136,8 @@ int main(int argc, char** argv) {
             //Error
             break;
         }
+        eb_header.trig_number = htonl(*((uint32_t*)(buffer + 0)));
+        eb_header.status = htonl(*((uint32_t*)(buffer + 4)));
         eb_header.device_mask = htonll(*((uint64_t*)(buffer + 8)));
         // We'll only look at the bottom 32-bits
         temp_out_data.device_mask = (uint32_t)(eb_header.device_mask & 0xFFFFFFFF);
@@ -172,10 +174,10 @@ int main(int argc, char** argv) {
             trig_header.device_id = *((uint8_t*) (buffer+18)); 
             trig_header.trig_flag = *((uint8_t*) (buffer+19)); 
             trig_header.self_trigger_word = ntohl(*((uint32_t*) (buffer+20)));
-            trig_header.beam_time = *((uint64_t*) (buffer+24)); 
-            trig_header.led_trigger_time = *((uint64_t*) (buffer+32)); 
-            trig_header.ct_time = *((uint64_t*) (buffer+40)); 
-            trig_header.crc = *((uint32_t*) (buffer+48));
+            trig_header.beam_time = ntohll(*((uint64_t*) (buffer+24)));
+            trig_header.led_trigger_time = ntohll(*((uint64_t*) (buffer+32)));
+            trig_header.ct_time = ntohll(*((uint64_t*) (buffer+40)));
+            trig_header.crc = ntohl(*((uint32_t*) (buffer+48)));
 
             temp_out_data.fontus_timetag = trig_header.timestamp;
             temp_out_data.trigger_word = trig_header.trig_flag;
