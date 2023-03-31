@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
         }
 
         // Temporary hack to deal with a bug that was present in the Dec2022 data
-        if(temp_out_data.nmod == 0) {
+        if(temp_out_data.device_mask == 0) {
             temp_out_data.nmod = 8;// TODO
         }
 
@@ -187,7 +187,7 @@ int main(int argc, char** argv) {
             temp_out_data.ct_timetag = trig_header.ct_time;
 
             // See if we have to do the look back thing
-            if(loop!=0) {
+            if(loop!=0 && temp_out_data.nmod > 0) {
                 double earliest_time = 0;
                 double latest_time = 0;
                 for(int i=0; i<temp_out_data.nmod; i++) {
@@ -292,9 +292,11 @@ int main(int argc, char** argv) {
             }
         }
 
-        long next_event = data_start_locations[out_data.nmod-1] + (headers[out_data.nmod-1].length+2)*sizeof(uint32_t)*NUM_CHANNELS_PER_MOD;
-        if(fseek(fin, next_event, SEEK_SET)) {
-            goto DONE;
+        if(out_data.nmod > 0) {
+            long next_event = data_start_locations[out_data.nmod-1] + (headers[out_data.nmod-1].length+2)*sizeof(uint32_t)*NUM_CHANNELS_PER_MOD;
+            if(fseek(fin, next_event, SEEK_SET)) {
+                goto DONE;
+            }
         }
         loop++;
     }
